@@ -11,8 +11,8 @@ using System.Linq;
 */
 public partial class ClientPlayer : CharacterBody3D
 {
-    private readonly List<LocalInput> _userInputs = new();
-
+    private bool _simulating = false;
+    private readonly List<LocalInput> _userInputs = new ();
     private int _networkId = -1;
     private int _lastStampReceived = 0;
     private int _misspredictionCounter = 0;
@@ -38,60 +38,83 @@ public partial class ClientPlayer : CharacterBody3D
             SolveAutoMove();
             userInput.Input = _automoveInput;
         }
-        _userInputs.Add(userInput);
-        SendInputs(currentTick);
-        AdvancePhysics(userInput.Input);
+        if(!_simulating)
+        {
+            PushLocalState(userInput);
+            SendInputs(currentTick);
+            AdvancePhysics(userInput.Input);
+        }
+    }
+
+    private void PushLocalState(LocalInput input)
+    {
+        input.State = GetCurrentState();
+        _userInputs.Add(input); 
     }
 
     // Applies inputs ahead of the server (Prediction)
     private void AdvancePhysics(byte input)
     {
         this.Velocity = PlayerMovement.ComputeMotion(
-            this.GetRid(),
             this.GlobalTransform,
             this.Velocity,
             PlayerMovement.InputToDirection(input));
 
-        Position += this.Velocity * PlayerMovement.FrameDelta;
+        MoveAndSlide();
     }
 
     // Called when a UserState is received from the server
     // Here we validate that our prediction was correct
-    public void ReceiveState(NetMessage.EntityState state, int forTick)
+    public void ReceiveState(NetMessage.EntityState incomingState, int forTick)
     {
+        if (_simulating)
+            return;
+
         // Ignore any stamp that should have been received in the past
         if (forTick > _lastStampReceived)
             _lastStampReceived = forTick;
         else return;
 
-        _userInputs.RemoveAll(input => input.Tick <= forTick); // Delete all stored inputs up to that point, we don't need them anymore
+        // TODO: Figure out why this only works when adding +1 to forTick
+        _userInputs.RemoveAll(input => input.Tick < forTick + 1); // Delete all stored inputs up to that point, we don't need them anymore
+        LocalInput stateForTick = _userInputs.Where(x => x.Tick == forTick + 1).FirstOrDefault();
 
-        // Re-apply all inputs that haven't been processed by the server starting from the last acked state (the one just received)
-        Transform3D expectedTransform = this.GlobalTransform;
-        expectedTransform.Origin = state.Position;
+        if (stateForTick.State == null)
+            return;
 
-        Vector3 expectedVelocity = state.Velocity;
+        // IncomingState is where we should have been at the tick, stateForTick is our current position
+		var deviation = incomingState.Position - stateForTick.State.Position;
 
-        foreach (var userInput in _userInputs) // Re-apply all inputs
-        {
-            expectedVelocity = PlayerMovement.ComputeMotion(
-                this.GetRid(),
-                expectedTransform,
-                expectedVelocity,
-                PlayerMovement.InputToDirection(userInput.Input));
+		// Reconciliation with authoritative state if the deviation is too high
+		if (deviation.LengthSquared() > 0.0001f)
+		{   
+            _simulating = true;
+            // Re-apply all inputs that haven't been processed by the server starting from the last acked state (the one just received)
+            Transform3D expectedTransform = this.GlobalTransform;
+            expectedTransform.Origin = incomingState.Position;
 
-            expectedTransform.Origin += expectedVelocity * PlayerMovement.FrameDelta;
-        }
+            Vector3 expectedVelocity = incomingState.Velocity;
 
-        var deviation = expectedTransform.Origin - Position; // expectedTransform is where we should be, Position is our current position
+            GD.PrintErr($"Client {this._networkId} prediction mismatch ({deviation.Length()}) (Stamp {forTick})!\nExpected Pos:{expectedTransform.Origin} Vel:{expectedVelocity}\nCalculated Pos:{stateForTick.State.Position} Vel:{stateForTick.State.Velocity}\n");
 
-        // Reconciliation with authoritative state if the deviation is too high
-        if (deviation.Length() > 0)
-        {
-            this.GlobalTransform = expectedTransform;
-            this.Velocity = expectedVelocity;
+            GlobalTransform = expectedTransform;
+            Velocity = expectedVelocity;
+
+            foreach (var userInput in _userInputs) // Re-apply all inputs
+            {
+                expectedVelocity = PlayerMovement.ComputeMotion(
+                    expectedTransform,
+                    expectedVelocity,
+                    PlayerMovement.InputToDirection(userInput.Input));
+
+                Velocity = expectedVelocity;
+                Velocity *= (float)GetPhysicsProcessDeltaTime() / (float)GetProcessDeltaTime();
+                MoveAndSlide();
+                Velocity /= (float)GetPhysicsProcessDeltaTime() / (float)GetProcessDeltaTime();
+            }
+
             _misspredictionCounter++;
-            GD.PrintErr($"Client {this.Multiplayer.GetUniqueId()} prediction mismatch ({deviation.Length()}) (Stamp {forTick})!\nExpected Pos:{expectedTransform.Origin} Vel:{expectedVelocity}\nCalculated Pos:{Position} Vel:{Velocity}\n");
+            _simulating = false;
         }
     }
 
@@ -125,6 +148,16 @@ public partial class ClientPlayer : CharacterBody3D
                 MultiplayerPeer.TransferModeEnum.Unreliable, 0);
         }
     }
+
+    public NetMessage.EntityState GetCurrentState()
+	{
+		return new NetMessage.EntityState
+		{
+			Id = _networkId,
+			PosArray = new float[3] { this.Position.X, this.Position.Y, this.Position.Z },
+			VelArray = new float[3] { this.Velocity.X, this.Velocity.Y, this.Velocity.Z }
+		};
+	}
 
     private static LocalInput GenerateUserInput(int tick)
     {
@@ -162,5 +195,6 @@ public partial class ClientPlayer : CharacterBody3D
     {
         public int Tick;
         public byte Input;
+        public EntityState State;
     }
 }

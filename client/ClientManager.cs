@@ -41,7 +41,8 @@ public partial class ClientManager : Node
 		_clock.ProcessTick();
 		int currentTick = _clock.GetCurrentTick();
 		int currentRemoteTick = _clock.GetCurrentRemoteTick();
-		CustomSpawner.LocalPlayer.ProcessTick(currentRemoteTick);
+		if (CustomSpawner.LocalPlayer != null)
+			CustomSpawner.LocalPlayer.ProcessTick(currentRemoteTick);
 		_snapshotInterpolator.ProcessTick(currentTick);
 	}
 

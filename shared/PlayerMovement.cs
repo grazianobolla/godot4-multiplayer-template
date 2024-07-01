@@ -5,7 +5,7 @@ public static class PlayerMovement
 {
     public static readonly float FrameDelta = 1.0f / Engine.PhysicsTicksPerSecond;
 
-    public static Vector3 ComputeMotion(Rid rid, Transform3D from, Vector3 velocity, Vector2 input)
+    public static Vector3 ComputeMotion(Transform3D from, Vector3 velocity, Vector2 input)
     {
         Vector3 direction = new Vector3(input.X, 0, input.Y).Normalized();
 
@@ -17,19 +17,6 @@ public static class PlayerMovement
         else
         {
             velocity *= 0.99f;
-        }
-
-        PhysicsTestMotionParameters3D testParameters = new();
-        testParameters.From = from;
-        testParameters.Motion = velocity * FrameDelta;
-
-        PhysicsTestMotionResult3D collResult = new();
-
-        bool hasCollided = PhysicsServer3D.BodyTestMotion(rid, testParameters, collResult);
-
-        if (hasCollided)
-        {
-            velocity = velocity.Slide(collResult.GetCollisionNormal());
         }
 
         return velocity;

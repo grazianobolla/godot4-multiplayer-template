@@ -9,7 +9,7 @@ public partial class ServerManager : Node
 	[Export] private int _port = 9999;
 
 	private SceneMultiplayer _multiplayer = new();
-	private Godot.Collections.Array<Godot.Node> entityArray;
+	private Godot.Collections.Array<Godot.Node> entityArray = new Godot.Collections.Array<Node>();
 	private ServerClock _serverClock;
 
 	private int _currentTick = 0;
